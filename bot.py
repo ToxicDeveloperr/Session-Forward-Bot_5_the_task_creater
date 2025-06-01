@@ -31,22 +31,11 @@ BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.json")
 
 # Initialize Telethon client for user session (forwarding)
-try:
-    steallootdealUser = TelegramClient(StringSession(SESSION), APP_ID, API_HASH)
-    steallootdealUser.start()
-    logging.info("User session client started.")
-except Exception as ap:
-    logging.error(f"Error initializing User session client: {ap}")
-    exit(1)
+steallootdealUser = TelegramClient(StringSession(SESSION), APP_ID, API_HASH)
 
 # Initialize Telethon client for bot (commands)
 if BOT_API_KEY:
-    try:
-        bot = TelegramClient('bot', APP_ID, API_HASH).start(bot_token=BOT_API_KEY)
-        logging.info("Bot client started.")
-    except Exception as e:
-        logging.error(f"Error initializing Bot client: {e}")
-        bot = None # Set bot to None if initialization fails
+    bot = TelegramClient('bot', APP_ID, API_HASH)
 else:
     logging.warning("BOT_API_KEY not provided. Bot command functionality will be disabled.")
     bot = None
@@ -385,37 +374,56 @@ async def update_forwarding_event_handler():
 # will be done by inserting the call to update_forwarding_event_handler().
 # This is a conceptual change, the tool will handle the exact line insertions.
 
-# Start the message processor
-steallootdealUser.loop.create_task(message_processor())
-
 # Start the message processor for user client
-steallootdealUser.loop.create_task(message_processor())
+# This will be started in the main function after the loop is running.
 
 # Run the clients
 async def main():
-    await steallootdealUser.connect()
-    if bot:
-        await bot.connect()
-    
-    logging.info("User client and Bot client (if configured) are running.")
-    
-    # Keep the script running
-    if bot:
-        await asyncio.gather(
-            steallootdealUser.run_until_disconnected(),
-            bot.run_until_disconnected()
-        )
-    else:
-        await steallootdealUser.run_until_disconnected()
+    try:
+        await steallootdealUser.start()
+        logging.info("User session client started.")
+        
+        # Start the message processor task once the user client's loop is active
+        asyncio.create_task(message_processor())
+        logging.info("Message processor task created for user client.")
+
+        if bot:
+            await bot.start(bot_token=BOT_API_KEY)
+            logging.info("Bot client started.")
+
+        logging.info("User client and Bot client (if configured) are running.")
+        
+        # Keep the script running
+        if bot:
+            await asyncio.gather(
+                steallootdealUser.run_until_disconnected(),
+                bot.run_until_disconnected()
+            )
+        else:
+            await steallootdealUser.run_until_disconnected()
+            
+    except Exception as e:
+        logging.error(f"Error in main execution: {e}")
+    finally:
+        logging.info("Shutting down clients...")
+        if steallootdealUser.is_connected():
+            await steallootdealUser.disconnect()
+            logging.info("User session client disconnected.")
+        if bot and bot.is_connected():
+            await bot.disconnect()
+            logging.info("Bot client disconnected.")
+        logging.info("All clients disconnected.")
 
 if __name__ == '__main__':
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        logging.info("Bot stopped by user.")
+        logging.info("Bot stopped by user (KeyboardInterrupt).")
+    except RuntimeError as e:
+        if "There is no current event loop" in str(e) or "Event loop is closed" in str(e):
+            logging.error(f"Event loop error during shutdown: {e}")
+        else:
+            raise # Re-raise other RuntimeErrors
     finally:
-        if steallootdealUser.is_connected():
-            steallootdealUser.disconnect()
-        if bot and bot.is_connected():
-            bot.disconnect()
-        logging.info("Clients disconnected.")
+        # Final cleanup, though disconnects should ideally happen in main's finally
+        logging.info("Script finished.")
