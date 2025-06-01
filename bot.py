@@ -30,13 +30,26 @@ BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 # Define mapping file path
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.json")
 
-# Initialize Telethon client
+# Initialize Telethon client for user session (forwarding)
 try:
-    steallootdealUser     = TelegramClient(StringSession(SESSION), APP_ID, API_HASH)
-    steallootdealUser    .start()
+    steallootdealUser = TelegramClient(StringSession(SESSION), APP_ID, API_HASH)
+    steallootdealUser.start()
+    logging.info("User session client started.")
 except Exception as ap:
-    logging.error(f"Error initializing Telethon client: {ap}")
+    logging.error(f"Error initializing User session client: {ap}")
     exit(1)
+
+# Initialize Telethon client for bot (commands)
+if BOT_API_KEY:
+    try:
+        bot = TelegramClient('bot', APP_ID, API_HASH).start(bot_token=BOT_API_KEY)
+        logging.info("Bot client started.")
+    except Exception as e:
+        logging.error(f"Error initializing Bot client: {e}")
+        bot = None # Set bot to None if initialization fails
+else:
+    logging.warning("BOT_API_KEY not provided. Bot command functionality will be disabled.")
+    bot = None
 
 # Define source and destination channels
 # SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1001927159396") #Ävåïlåßlê
@@ -184,6 +197,7 @@ async def setmap_command_handler(event):
         # Save to file
         if save_mapping_to_file():
             await event.respond(f"✅ Mapping set: {source_id} → {destination_id}")
+            await update_forwarding_event_handler()
         else:
             await event.respond("❌ Error saving mapping to file.")
     
@@ -225,6 +239,7 @@ async def removemap_command_handler(event):
         # Save to file
         if save_mapping_to_file():
             await event.respond(f"✅ Mapping removed: {source_id} → {destination_id}")
+            await update_forwarding_event_handler()
         else:
             await event.respond("❌ Error saving mapping to file.")
     
@@ -322,17 +337,85 @@ async def message_processor():
                 logging.debug(f"message_queue.task_done() called for event from chat {event.chat_id}")
 
 # Register event handlers
+# Forwarding logic on user client
 source_channels = list(SOURCE_DESTINATION_MAP.keys())
-steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
-steallootdealUser.add_event_handler(start_command_handler, events.NewMessage(pattern='/start', incoming=True))
-steallootdealUser.add_event_handler(setmap_command_handler, events.NewMessage(pattern='/setmap', incoming=True))
-steallootdealUser.add_event_handler(removemap_command_handler, events.NewMessage(pattern='/removemap', incoming=True))
-steallootdealUser.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))
+if source_channels: # Only add handler if there are source channels from mapping
+    steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
+else:
+    logging.warning("No source channels found in mapping.json. Forwarding will not work until mappings are set via commands.")
+
+# Command handlers on bot client
+if bot:
+    bot.add_event_handler(start_command_handler, events.NewMessage(pattern='/start', incoming=True))
+    bot.add_event_handler(setmap_command_handler, events.NewMessage(pattern='/setmap', incoming=True))
+    bot.add_event_handler(removemap_command_handler, events.NewMessage(pattern='/removemap', incoming=True))
+    bot.add_event_handler(getmap_command_handler, events.NewMessage(pattern='/getmap', incoming=True))
+else:
+    logging.warning("Bot client not initialized. Command handlers will not be registered.")
+
+# Update source_channels for forwarding when mapping changes
+async def update_forwarding_event_handler():
+    global source_channels
+    new_source_channels = list(SOURCE_DESTINATION_MAP.keys())
+    if set(new_source_channels) != set(source_channels):
+        logging.info(f"Source channels changed. Old: {source_channels}, New: {new_source_channels}")
+        # Remove old handler
+        steallootdealUser.remove_event_handler(sender_bH, events.NewMessage(incoming=True, chats=source_channels))
+        # Add new handler if there are new source channels
+        if new_source_channels:
+            steallootdealUser.add_event_handler(sender_bH, events.NewMessage(incoming=True, chats=new_source_channels))
+            logging.info("Updated forwarding event handler with new source channels.")
+        else:
+            logging.warning("No source channels in mapping after update. Forwarding stopped.")
+        source_channels = new_source_channels
+
+# Modify setmap and removemap to call update_forwarding_event_handler
+# (This requires modifying the existing setmap_command_handler and removemap_command_handler functions)
+# We will add the call to update_forwarding_event_handler() after save_mapping_to_file() succeeds.
+
+# Example modification for setmap_command_handler (similar change for removemap_command_handler):
+# async def setmap_command_handler(event):
+#     ...
+#     if save_mapping_to_file():
+#         await event.respond(f"✅ Mapping set: {source_id} → {destination_id}")
+#         await update_forwarding_event_handler() # Add this line
+#     ...
+
+# For brevity, the actual modification of setmap_command_handler and removemap_command_handler
+# will be done by inserting the call to update_forwarding_event_handler().
+# This is a conceptual change, the tool will handle the exact line insertions.
 
 # Start the message processor
 steallootdealUser.loop.create_task(message_processor())
 
-# Run the bot
-print("Bot has started.")
-logging.info("Starting Telethon client run_until_disconnected...")
-steallootdealUser.run_until_disconnected()
+# Start the message processor for user client
+steallootdealUser.loop.create_task(message_processor())
+
+# Run the clients
+async def main():
+    await steallootdealUser.connect()
+    if bot:
+        await bot.connect()
+    
+    logging.info("User client and Bot client (if configured) are running.")
+    
+    # Keep the script running
+    if bot:
+        await asyncio.gather(
+            steallootdealUser.run_until_disconnected(),
+            bot.run_until_disconnected()
+        )
+    else:
+        await steallootdealUser.run_until_disconnected()
+
+if __name__ == '__main__':
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logging.info("Bot stopped by user.")
+    finally:
+        if steallootdealUser.is_connected():
+            steallootdealUser.disconnect()
+        if bot and bot.is_connected():
+            bot.disconnect()
+        logging.info("Clients disconnected.")
