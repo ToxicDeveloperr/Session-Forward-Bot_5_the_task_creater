@@ -6,6 +6,9 @@ from decouple import config
 import logging
 from telethon.sessions import StringSession
 import asyncio
+from telethon.tl.functions.messages import StartBotRequest
+from telethon.errors import FloodWaitError
+import time
 
 # Configure logging
 logging.basicConfig(format='[%(levelname) 5s/%(asctime)s] %(name)s: %(message)s', level=logging.INFO)
@@ -27,6 +30,13 @@ MEDIA_FORWARD_RESPONSE = config("MEDIA_FORWARD_RESPONSE", default="yes").lower()
 YOUR_ADMIN_USER_ID = config("YOUR_ADMIN_USER_ID", default=0, cast=int)
 BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 
+# Initialize file store bot info
+FILE_STORE_BOT_USERNAME = config("FILE_STORE_BOT_USERNAME", default="sakshitgbot")
+FILE_STORE_SOURCE_CHANNEL = config("FILE_STORE_SOURCE_CHANNEL", default="-1002823482126")  # Channel where file store links will be posted
+FILE_STORE_DESTINATION_CHANNEL = config("FILE_STORE_DESTINATION_CHANNEL", default="-1002224926400")  # Channel where files will be forwarded
+FILE_STORE_REGEX = rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=file-(\w+)"
+FLOOD_WAIT_DELAY = 60  # Delay in seconds after flood wait error
+
 # Define mapping file path
 MAPPING_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "mapping.json")
 
@@ -41,46 +51,13 @@ else:
     bot = None
 
 # Define source and destination channels
-# SOURCE_CHANNEL_1 = os.environ.get("SOURCE_CHANNEL_1", "-1001927159396") #Ävåïlåßlê
-# SOURCE_CHANNEL_2 = os.environ.get("SOURCE_CHANNEL_2", "-1001808135797") #S0uth Mov!e Shorts
-# SOURCE_CHANNEL_3 = os.environ.get("SOURCE_CHANNEL_3", "-1002045229088") #Movie_house
-# SOURCE_CHANNEL_4 = os.environ.get("SOURCE_CHANNEL_4", "-1002603982843") #Japaneas_hub
-# SOURCE_CHANNEL_5 = os.environ.get("SOURCE_CHANNEL_5", "-1001741122061") #DamselMovieDownload
-# SOURCE_CHANNEL_6 = os.environ.get("SOURCE_CHANNEL_6", "-1002336841751") #All South Hindi dubbed movies
-# SOURCE_CHANNEL_7 = os.environ.get("SOURCE_CHANNEL_7", "-1002607828329") #Instagram_links
-# SOURCE_CHANNEL_8 = os.environ.get("SOURCE_CHANNEL_8", "-1002092938265") #Tera special Collectionn
-SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #testmmfilelog
-
-# DESTINATION_CHANNEL_1 = os.environ.get("DESTINATION_CHANNEL_1", "-1002661425980") #Bypass Hollywood Forward
-# DESTINATION_CHANNEL_2 = os.environ.get("DESTINATION_CHANNEL_2", "-1002548718458") #Bypass Indian Forward
-# DESTINATION_CHANNEL_3 = os.environ.get("DESTINATION_CHANNEL_3", "-1002488212445") #IndianMoviesForward
-# DESTINATION_CHANNEL_4 = os.environ.get("DESTINATION_CHANNEL_4", "-1002377412867") #TheVideoForward
-# DESTINATION_CHANNEL_5 = os.environ.get("DESTINATION_CHANNEL_5", "-1002402818813") #ExtraChannel
-# DESTINATION_CHANNEL_6 = os.environ.get("DESTINATION_CHANNEL_6", "-1002488212445") #IndianMoviesForward
-# DESTINATION_CHANNEL_7 = os.environ.get("DESTINATION_CHANNEL_7", "-1002377412867") #TheVideoForward
-# DESTINATION_CHANNEL_8 = os.environ.get("DESTINATION_CHANNEL_8", "-1002377412867") #TheVideoForward
-DESTINATION_CHANNEL_9 = os.environ.get("DESTINATION_CHANNEL_9", "-1002348514977") #TestDemo3
+SOURCE_CHANNEL_9 = os.environ.get("FILE_STORE_SOURCE_CHANNEL", "-1002271035070") #File Store Channel
+DESTINATION_CHANNEL_9 = os.environ.get("FILE_STORE_DESTINATION_CHANNEL", "-1002348514977") #File Store Destination
 
 class ChannelIDs:
     def __init__(self):
         # Split by comma or space and convert to integers
-        # self.source_channel_1 = [int(i.strip()) for i in SOURCE_CHANNEL_1.replace(",", " ").split()]
-        # self.source_channel_2 = [int(i.strip()) for i in SOURCE_CHANNEL_2.replace(",", " ").split()]
-        # self.source_channel_3 = [int(i.strip()) for i in SOURCE_CHANNEL_3.replace(",", " ").split()]
-        # self.source_channel_4 = [int(i.strip()) for i in SOURCE_CHANNEL_4.replace(",", " ").split()]
-        # self.source_channel_5 = [int(i.strip()) for i in SOURCE_CHANNEL_5.replace(",", " ").split()]
-        # self.source_channel_6 = [int(i.strip()) for i in SOURCE_CHANNEL_6.replace(",", " ").split()]
-        # self.source_channel_7 = [int(i.strip()) for i in SOURCE_CHANNEL_7.replace(",", " ").split()]
-        # self.source_channel_8 = [int(i.strip()) for i in SOURCE_CHANNEL_8.replace(",", " ").split()]
         self.source_channel_9 = [int(i.strip()) for i in SOURCE_CHANNEL_9.replace(",", " ").split()]
-        # self.destination_channel_1 = [int(i.strip()) for i in DESTINATION_CHANNEL_1.replace(",", " ").split()]
-        # self.destination_channel_2 = [int(i.strip()) for i in DESTINATION_CHANNEL_2.replace(",", " ").split()]
-        # self.destination_channel_3 = [int(i.strip()) for i in DESTINATION_CHANNEL_3.replace(",", " ").split()]
-        # self.destination_channel_4 = [int(i.strip()) for i in DESTINATION_CHANNEL_4.replace(",", " ").split()]
-        # self.destination_channel_5 = [int(i.strip()) for i in DESTINATION_CHANNEL_5.replace(",", " ").split()]
-        # self.destination_channel_6 = [int(i.strip()) for i in DESTINATION_CHANNEL_6.replace(",", " ").split()]
-        # self.destination_channel_7 = [int(i.strip()) for i in DESTINATION_CHANNEL_7.replace(",", " ").split()]
-        # self.destination_channel_8 = [int(i.strip()) for i in DESTINATION_CHANNEL_8.replace(",", " ").split()]
         self.destination_channel_9 = [int(i.strip()) for i in DESTINATION_CHANNEL_9.replace(",", " ").split()]
 
     def get_source_destination_map(self):
@@ -96,14 +73,6 @@ class ChannelIDs:
         
         # Fall back to default mapping if file doesn't exist or has errors
         return {
-            # self.source_channel_1[0]: self.destination_channel_1,
-            # self.source_channel_2[0]: self.destination_channel_2,
-            # self.source_channel_3[0]: self.destination_channel_3,
-            # self.source_channel_4[0]: self.destination_channel_4,
-            # self.source_channel_5[0]: self.destination_channel_5,
-            # self.source_channel_6[0]: self.destination_channel_6,
-            # self.source_channel_7[0]: self.destination_channel_7,
-            # self.source_channel_8[0]: self.destination_channel_8,
             self.source_channel_9[0]: self.destination_channel_9,
             # Add more source-destination pairs as needed
         }
@@ -128,6 +97,37 @@ def save_mapping_to_file():
 if not os.path.exists(MAPPING_FILE):
     save_mapping_to_file()
 
+async def get_file_from_store(client, file_id):
+    try:
+        # Start conversation with file store bot
+        await client(StartBotRequest(
+            bot=FILE_STORE_BOT_USERNAME,
+            peer=FILE_STORE_BOT_USERNAME,
+            start_param=f"file-{file_id}"
+        ))
+        
+        # Wait for the file message
+        start_time = time.time()
+        while True:
+            if time.time() - start_time > 30:  # 30 seconds timeout
+                raise TimeoutError("File not received within timeout")
+                
+            # Get messages from the bot
+            async for message in client.iter_messages(FILE_STORE_BOT_USERNAME, limit=5):
+                if message.media and time.time() - message.date.timestamp() < 30:
+                    return message
+                    
+            await asyncio.sleep(1)
+            
+    except FloodWaitError as e:
+        logging.warning(f"FloodWaitError: Waiting for {e.seconds} seconds")
+        await asyncio.sleep(e.seconds)
+        return await get_file_from_store(client, file_id)
+        
+    except Exception as e:
+        logging.error(f"Error getting file from store: {e}")
+        return None
+
 # Event handler for incoming messages
 async def sender_bH(event):
     if not event or not event.message:
@@ -140,13 +140,26 @@ async def sender_bH(event):
         chat_id = event.chat_id
         message_id = event.message.id
         logging.info(f"sender_bH triggered for event from chat: {chat_id}, message ID: {message_id}")
-    except AttributeError as ae:
-        logging.error(f"sender_bH: Error accessing event attributes (chat_id or message.id): {ae}. Event data: {event}")
-        return
-
-    try:
+        
+        # Check for file store links
+        if event.message.text:
+            match = re.search(FILE_STORE_REGEX, event.message.text)
+            if match:
+                file_id = match.group(1)
+                logging.info(f"Found file store link with ID: {file_id}")
+                
+                # Get file from store
+                file_message = await get_file_from_store(steallootdealUser, file_id)
+                if file_message:
+                    # Replace original event with file message
+                    event.message = file_message
+                else:
+                    logging.error("Failed to get file from store")
+                    return
+        
         await message_queue.put(event)
         logging.info(f"Message ID {message_id} from chat {chat_id} added to queue. Queue size: {message_queue.qsize()}")
+        
     except Exception as e:
         logging.error(f"Error in sender_bH adding message ID {message_id} from chat {chat_id} to queue: {e}")
 
