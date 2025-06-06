@@ -34,7 +34,13 @@ BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 FILE_STORE_BOT_USERNAME = config("FILE_STORE_BOT_USERNAME", default="sakshitgbot")
 FILE_STORE_SOURCE_CHANNEL = config("FILE_STORE_SOURCE_CHANNEL", default="-1002823482126")  # Channel where file store links will be posted
 FILE_STORE_DESTINATION_CHANNEL = config("FILE_STORE_DESTINATION_CHANNEL", default="-1002224926400")  # Channel where files will be forwarded
-FILE_STORE_REGEX = rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=file-(\w+)"
+
+# Multiple regex patterns to match different link formats
+FILE_STORE_REGEX_PATTERNS = [
+    rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=file-(\w+)",
+    rf"https://t\.me/{FILE_STORE_BOT_USERNAME}\?start=(\w+)",
+    rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=(\w+)",
+]
 FLOOD_WAIT_DELAY = 60  # Delay in seconds after flood wait error
 
 # Define mapping file path
@@ -51,8 +57,8 @@ else:
     bot = None
 
 # Define source and destination channels
-SOURCE_CHANNEL_9 = os.environ.get("FILE_STORE_SOURCE_CHANNEL", "-1002271035070") #File Store Channel
-DESTINATION_CHANNEL_9 = os.environ.get("FILE_STORE_DESTINATION_CHANNEL", "-1002348514977") #File Store Destination
+SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #File Store Channel
+DESTINATION_CHANNEL_9 = os.environ.get("DESTINATION_CHANNEL_9", "-1002348514977") #File Store Destination
 
 class ChannelIDs:
     def __init__(self):
@@ -143,19 +149,21 @@ async def sender_bH(event):
         
         # Check for file store links
         if event.message.text:
-            match = re.search(FILE_STORE_REGEX, event.message.text)
-            if match:
-                file_id = match.group(1)
-                logging.info(f"Found file store link with ID: {file_id}")
-                
-                # Get file from store
-                file_message = await get_file_from_store(steallootdealUser, file_id)
-                if file_message:
-                    # Replace original event with file message
-                    event.message = file_message
-                else:
-                    logging.error("Failed to get file from store")
-                    return
+            for pattern in FILE_STORE_REGEX_PATTERNS:
+                match = re.search(pattern, event.message.text)
+                if match:
+                    file_id = match.group(1)
+                    logging.info(f"Found file store link with ID: {file_id}")
+                    
+                    # Get file from store
+                    file_message = await get_file_from_store(steallootdealUser, file_id)
+                    if file_message:
+                        # Replace original event with file message
+                        event.message = file_message
+                        break  # Exit loop if file is successfully retrieved
+                    else:
+                        logging.error("Failed to get file from store")
+                        return
         
         await message_queue.put(event)
         logging.info(f"Message ID {message_id} from chat {chat_id} added to queue. Queue size: {message_queue.qsize()}")
