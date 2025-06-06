@@ -30,16 +30,21 @@ MEDIA_FORWARD_RESPONSE = config("MEDIA_FORWARD_RESPONSE", default="yes").lower()
 YOUR_ADMIN_USER_ID = config("YOUR_ADMIN_USER_ID", default=0, cast=int)
 BOT_API_KEY = config("BOT_API_KEY", default="", cast=str)
 
-# Initialize file store bot info
+# Initialize file store bot info and channels
 FILE_STORE_BOT_USERNAME = config("FILE_STORE_BOT_USERNAME", default="sakshitgbot")
-FILE_STORE_SOURCE_CHANNEL = config("FILE_STORE_SOURCE_CHANNEL", default="-1002823482126")  # Channel where file store links will be posted
-FILE_STORE_DESTINATION_CHANNEL = config("FILE_STORE_DESTINATION_CHANNEL", default="-1002224926400")  # Channel where files will be forwarded
+FILE_STORE_SOURCE_CHANNEL = config("FILE_STORE_SOURCE_CHANNEL", default="-1002823482126")
+FILE_STORE_DESTINATION_CHANNEL = config("FILE_STORE_DESTINATION_CHANNEL", default="-1002224926400")
+
+# Add file store channels to source/destination mapping
+SOURCE_CHANNEL_9 = FILE_STORE_SOURCE_CHANNEL  # Use file store source channel
+DESTINATION_CHANNEL_9 = FILE_STORE_DESTINATION_CHANNEL  # Use file store destination channel
 
 # Multiple regex patterns to match different link formats
 FILE_STORE_REGEX_PATTERNS = [
     rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=file-(\w+)",
     rf"https://t\.me/{FILE_STORE_BOT_USERNAME}\?start=(\w+)",
     rf"https://telegram\.me/{FILE_STORE_BOT_USERNAME}\?start=(\w+)",
+    rf"https://t\.me/{FILE_STORE_BOT_USERNAME}\?start=get-(\w+)"
 ]
 FLOOD_WAIT_DELAY = 60  # Delay in seconds after flood wait error
 
@@ -56,9 +61,68 @@ else:
     logging.warning("BOT_API_KEY not provided. Bot command functionality will be disabled.")
     bot = None
 
-# Define source and destination channels
-SOURCE_CHANNEL_9 = os.environ.get("SOURCE_CHANNEL_9", "-1002271035070") #File Store Channel
-DESTINATION_CHANNEL_9 = os.environ.get("DESTINATION_CHANNEL_9", "-1002348514977") #File Store Destination
+async def process_file_store_link(text, client):
+    for pattern in FILE_STORE_REGEX_PATTERNS:
+        match = re.search(pattern, text)
+        if match:
+            file_id = match.group(1)
+            logging.info(f"Found file store link with ID: {file_id}")
+            try:
+                # Start conversation with bot
+                await client(StartBotRequest(
+                    bot=FILE_STORE_BOT_USERNAME,
+                    peer=FILE_STORE_BOT_USERNAME,
+                    start_param=f"file-{file_id}"
+                ))
+                return True
+            except Exception as e:
+                logging.error(f"Error processing file store link: {e}")
+    return False
+
+async def download_and_send_media(message, destination):
+    try:
+        # Try different methods to forward the file
+        try:
+            # Method 1: Direct forward
+            await message.forward_to(destination)
+            return True
+        except:
+            try:
+                # Method 2: Download and send
+                path = await message.download_media(file="temp_download")
+                await steallootdealUser.send_file(destination, path)
+                if os.path.exists(path):
+                    os.remove(path)
+                return True
+            except Exception as e:
+                logging.error(f"Failed to send media: {e}")
+                return False
+    except Exception as e:
+        logging.error(f"Error in download_and_send_media: {e}")
+        return False
+
+async def handle_bot_message(event):
+    try:
+        # Check if message is from bot
+        if not hasattr(event.message.peer_id, 'user_id'):
+            return
+            
+        if str(event.message.peer_id.user_id) != FILE_STORE_BOT_USERNAME.replace("@", ""):
+            return
+            
+        logging.info(f"Received message from file store bot")
+        
+        # If message has media, forward it
+        if event.message.media:
+            # Try to forward to destination channel
+            success = await download_and_send_media(event.message, int(FILE_STORE_DESTINATION_CHANNEL))
+            if success:
+                logging.info("Successfully forwarded media from bot to destination")
+            else:
+                logging.error("Failed to forward media from bot")
+                
+    except Exception as e:
+        logging.error(f"Error in handle_bot_message: {e}")
 
 class ChannelIDs:
     def __init__(self):
@@ -140,8 +204,6 @@ async def sender_bH(event):
         logging.warning("sender_bH triggered with invalid event object.")
         return
 
-    chat_id = None
-    message_id = None
     try:
         chat_id = event.chat_id
         message_id = event.message.id
@@ -149,27 +211,26 @@ async def sender_bH(event):
         
         # Check for file store links
         if event.message.text:
-            for pattern in FILE_STORE_REGEX_PATTERNS:
-                match = re.search(pattern, event.message.text)
-                if match:
-                    file_id = match.group(1)
-                    logging.info(f"Found file store link with ID: {file_id}")
-                    
-                    # Get file from store
-                    file_message = await get_file_from_store(steallootdealUser, file_id)
-                    if file_message:
-                        # Replace original event with file message
-                        event.message = file_message
-                        break  # Exit loop if file is successfully retrieved
-                    else:
-                        logging.error("Failed to get file from store")
-                        return
+            if await process_file_store_link(event.message.text, steallootdealUser):
+                logging.info("File store link processed successfully")
+                return  # Don't forward the link message itself
         
+        # For media messages or other messages
+        if int(str(chat_id)) == int(FILE_STORE_SOURCE_CHANNEL):
+            if event.message.media:
+                success = await download_and_send_media(event.message, int(FILE_STORE_DESTINATION_CHANNEL))
+                if success:
+                    logging.info("Successfully forwarded media from source to destination")
+                else:
+                    logging.error("Failed to forward media")
+            return
+            
+        # Process other channel messages normally
         await message_queue.put(event)
         logging.info(f"Message ID {message_id} from chat {chat_id} added to queue. Queue size: {message_queue.qsize()}")
         
     except Exception as e:
-        logging.error(f"Error in sender_bH adding message ID {message_id} from chat {chat_id} to queue: {e}")
+        logging.error(f"Error in sender_bH: {e}", exc_info=True)
 
 async def start_command_handler(event):
     welcome_message = "Hello! I'm your Telegram Forwarder Bot. To start forwarding messages, please ensure the channels are configured correctly.\n\nCommands:\n/setmap <source_id> to <destination_id> - Add mapping\n/removemap <source_id> to <destination_id> - Remove mapping\n/getmap - Show all mappings"
